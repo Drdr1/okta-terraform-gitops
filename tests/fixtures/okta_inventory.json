@@ -1,0 +1,56 @@
+{
+  "groups": [
+    {"id": "00g000000000001", "type": "BUILT_IN", "profile": {"name": "Everyone"}},
+    {"id": "00g000000000002", "type": "OKTA_GROUP", "profile": {"name": "Engineering"}},
+    {"id": "00g000000000003", "type": "OKTA_GROUP", "profile": {"name": "engineering"}},
+    {"id": "00g000000000004", "type": "APP_GROUP", "profile": {"name": "all-staff@corp.example"}},
+    {"id": "00g000000000005", "type": "OKTA_GROUP", "profile": {"name": "2024 Interns"}}
+  ],
+  "group_rules": [
+    {"id": "0pr000000000001", "name": "dept-engineering"}
+  ],
+  "apps": [
+    {"id": "0oa000000000001", "name": "saasure", "label": "Okta Admin Console", "signOnMode": "OPENID_CONNECT"},
+    {"id": "0oa000000000002", "name": "jira_cloud", "label": "Jira", "signOnMode": "SAML_2_0", "_group_count": 2, "_user_count": 0},
+    {"id": "0oa000000000003", "name": "oidc_client", "label": "Jira", "signOnMode": "OPENID_CONNECT", "_group_count": 1, "_user_count": 3},
+    {"id": "0oa000000000004", "name": "template_wsfed", "label": "Legacy SharePoint", "signOnMode": "WS_FEDERATION"},
+    {"id": "0oa000000000005", "name": "bookmark", "label": "Handbook", "signOnMode": "BOOKMARK", "_group_count": 0}
+  ],
+  "zones": [
+    {"id": "nzo000000000001", "name": "LegacyIpZone", "system": true},
+    {"id": "nzo000000000002", "name": "Office", "system": false}
+  ],
+  "policies": {
+    "PASSWORD": [
+      {"id": "00p000000000001", "name": "Default Policy", "system": true,
+       "_rules": [{"id": "0pr000000000010", "name": "Default Rule", "system": true}]}
+    ],
+    "ACCESS_POLICY": [
+      {"id": "rst000000000001", "name": "Any two factors", "system": false,
+       "_rules": [
+         {"id": "rul000000000001", "name": "Catch-all Rule", "system": true},
+         {"id": "rul000000000002", "name": "Office 2FA", "system": false}
+       ]}
+    ],
+    "OKTA_SIGN_ON": [
+      {"id": "00p000000000002", "name": "Default Policy", "system": true,
+       "_rules": [{"id": "0pr000000000020", "name": "Contractors short session", "system": false}]}
+    ]
+  },
+  "auth_servers": [
+    {"id": "default", "name": "default",
+     "_scopes": [{"id": "scp1", "name": "openid", "system": true}],
+     "_claims": [], "_policies": []},
+    {"id": "aus000000000001", "name": "Payments API",
+     "_scopes": [{"id": "scp2", "name": "openid", "system": true}, {"id": "scp3", "name": "payments.read", "system": false}],
+     "_claims": [{"id": "ocl1", "name": "groups", "claimType": "IDENTITY", "system": false}, {"id": "ocl2", "name": "sub", "system": true}],
+     "_policies": [{"id": "00p000000000003", "name": "Web apps",
+                    "_rules": [{"id": "0pr000000000030", "name": "Allow staff", "system": false}]}]}
+  ],
+  "idps": [
+    {"id": "0oa000000000101", "name": "Partner SAML", "type": "SAML2",
+     "protocol": {"credentials": {"trust": {"kid": "key000000000001"}}}},
+    {"id": "0oa000000000102", "name": "Google", "type": "GOOGLE"},
+    {"id": "0oa000000000103", "name": "Smart card", "type": "X509"}
+  ]
+}

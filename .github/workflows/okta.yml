@@ -1,0 +1,127 @@
+# Plan on pull request, apply on merge. Non-production Okta org only.
+#
+# Who can change Okta:
+#   1. PR review: branch protection on main requires an approving review from
+#      CODEOWNERS and the `plan` check. This is the approval that counts.
+#   2. Environment gate: the `okta-nonprod` environment can also require a
+#      named reviewer before `apply` starts (second key for sensitive orgs).
+#
+# Credentials (see docs/runbooks/credentials.md):
+#   okta-nonprod-plan  read-only Okta scopes, read-only state access
+#   okta-nonprod       manage scopes, state write, reachable only from main
+#
+# PR labels:
+#   allow-destroy  permit deletes/replaces of protected objects
+#   import-only    the plan must show no changes besides imports
+name: okta
+
+on:
+  pull_request:
+    # labeled/unlabeled so adding a label re-runs the guard.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write        # GitHub OIDC -> Google, for the state bucket
+  pull-requests: write   # plan comment
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  plan:
+    # Off until the repo variable OKTA_ENABLED=true (org connected); never for fork PRs.
+    if: vars.OKTA_ENABLED == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: okta-nonprod-plan
+    # A new push to the PR replaces an older plan of the same PR.
+    concurrency:
+      group: okta-plan-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      # Environment-level vars/secrets: each environment points at its own org and service app.
+      OKTA_ORG_NAME: ${{ vars.OKTA_ORG_NAME }}
+      OKTA_BASE_URL: ${{ vars.OKTA_BASE_URL }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_STATE_SA: ${{ vars.GCP_STATE_SA }}
+      OKTA_API_CLIENT_ID: ${{ secrets.OKTA_API_CLIENT_ID }}
+      OKTA_API_PRIVATE_KEY_ID: ${{ secrets.OKTA_API_PRIVATE_KEY_ID }}
+      OKTA_API_PRIVATE_KEY: ${{ secrets.OKTA_API_PRIVATE_KEY }}
+      OKTA_API_SCOPES: ${{ vars.OKTA_API_SCOPES }}
+      ALLOW_DESTROY: ${{ contains(github.event.pull_request.labels.*.name, 'allow-destroy') }}
+      IMPORT_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'import-only') }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/terraform-init
+        with:
+          state_prefix: okta/nonprod
+      - name: plan
+        working-directory: terraform
+        # -lock=false: a PR plan only reads, and its state SA cannot write.
+        run: |
+          terraform plan -lock=false -var-file=nonprod.tfvars -out=tfplan
+          terraform show -json tfplan > plan.json
+      - name: guard
+        id: guard
+        run: |
+          extra=""
+          if [ "$IMPORT_ONLY" = "true" ]; then extra="--expect-no-changes"; fi
+          python3 tools/plan_guard.py terraform/plan.json --summary plan-summary.md $extra
+      - name: comment
+        if: always() && steps.guard.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            cat plan-summary.md
+            echo
+            echo "<sub>commit ${GITHUB_SHA::7} · run [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})</sub>"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last --create-if-none
+
+  apply:
+    if: vars.OKTA_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: okta-nonprod
+    # Applies queue in merge order and are never cancelled. Plans use their
+    # own groups, so a PR plan can never push a pending apply out of the queue.
+    concurrency:
+      group: okta-apply-nonprod
+      cancel-in-progress: false
+    env:
+      OKTA_ORG_NAME: ${{ vars.OKTA_ORG_NAME }}
+      OKTA_BASE_URL: ${{ vars.OKTA_BASE_URL }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_STATE_SA: ${{ vars.GCP_STATE_SA }}
+      OKTA_API_CLIENT_ID: ${{ secrets.OKTA_API_CLIENT_ID }}
+      OKTA_API_PRIVATE_KEY_ID: ${{ secrets.OKTA_API_PRIVATE_KEY_ID }}
+      OKTA_API_PRIVATE_KEY: ${{ secrets.OKTA_API_PRIVATE_KEY }}
+      OKTA_API_SCOPES: ${{ vars.OKTA_API_SCOPES }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/terraform-init
+        with:
+          state_prefix: okta/nonprod
+      - name: labels on the merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          labels=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '.[0].labels[].name' || true)
+          if grep -qx allow-destroy <<<"$labels"; then echo "ALLOW_DESTROY=true" >> "$GITHUB_ENV"; fi
+      # Re-plan from main: the PR plan may be stale after other merges.
+      - name: plan
+        working-directory: terraform
+        run: |
+          terraform plan -var-file=nonprod.tfvars -out=tfplan
+          terraform show -json tfplan > plan.json
+      - name: guard
+        run: python3 tools/plan_guard.py terraform/plan.json --summary "$GITHUB_STEP_SUMMARY"
+      - name: apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan

@@ -1,0 +1,6 @@
+# Every Okta change needs a review from the identity owners.
+# Branch protection on main: require review from Code Owners + the `plan` check.
+*                @Drdr1
+/terraform/      @Drdr1
+/modules/        @Drdr1
+/.github/        @Drdr1

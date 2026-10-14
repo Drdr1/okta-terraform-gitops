@@ -1,0 +1,29 @@
+name: Terraform init for one Okta org
+description: Install Terraform, authenticate to the state bucket with Workload Identity Federation, and init.
+
+inputs:
+  state_prefix:
+    description: State path inside the bucket, one per Okta org.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+      with:
+        terraform_version: "1.9.8"
+        terraform_wrapper: false
+
+    # Keyless: GitHub OIDC -> Google service account that can only touch the state bucket.
+    - uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+      with:
+        workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+        service_account: ${{ env.GCP_STATE_SA }}
+
+    - name: terraform init
+      shell: bash
+      working-directory: terraform
+      run: |
+        terraform init -input=false -lockfile=readonly \
+          -backend-config="bucket=${TF_STATE_BUCKET}" \
+          -backend-config="prefix=${{ inputs.state_prefix }}"

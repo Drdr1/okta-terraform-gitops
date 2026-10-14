@@ -1,0 +1,68 @@
+# Read-only plan against an org: every object in state must still match the
+# code. A difference fails the run and opens (or updates) one issue. Uses
+# read-only API scopes, so it is safe to point at production.
+#
+# Limit: objects created in the console are not in state, so plan cannot see
+# them. Re-run tools/okta_discover.py and compare imports.tf with state to
+# catch those (docs/runbooks/change-flow.md).
+name: drift
+
+on:
+  schedule:
+    - cron: "17 13 * * 1-5"   # weekdays 06:17 PDT, nonprod; run prod from the Actions tab or add a second schedule
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Org to check
+        type: choice
+        options: [nonprod, prod]
+        default: nonprod
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+env:
+  TARGET: ${{ inputs.target || 'nonprod' }}
+
+jobs:
+  drift:
+    if: vars.OKTA_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: okta-${{ inputs.target || 'nonprod' }}-plan
+    env:
+      OKTA_ORG_NAME: ${{ vars.OKTA_ORG_NAME }}
+      OKTA_BASE_URL: ${{ vars.OKTA_BASE_URL }}
+      OKTA_API_CLIENT_ID: ${{ secrets.OKTA_API_CLIENT_ID }}
+      OKTA_API_PRIVATE_KEY_ID: ${{ secrets.OKTA_API_PRIVATE_KEY_ID }}
+      OKTA_API_PRIVATE_KEY: ${{ secrets.OKTA_API_PRIVATE_KEY }}
+      OKTA_API_SCOPES: ${{ vars.OKTA_API_SCOPES }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_STATE_SA: ${{ vars.GCP_STATE_SA }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/terraform-init
+        with:
+          state_prefix: okta/${{ env.TARGET }}
+      - name: read-only plan
+        working-directory: terraform
+        run: |
+          terraform plan -lock=false -var-file="${TARGET}.tfvars" -out=tfplan
+          terraform show -json tfplan > plan.json
+      - name: expect no changes
+        id: guard
+        run: python3 tools/plan_guard.py terraform/plan.json --expect-no-changes --summary drift.md
+      - name: open or update drift issue
+        if: failure() && steps.guard.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Okta drift: ${TARGET}"
+          num=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file drift.md
+          else
+            gh issue create --title "$title" --body-file drift.md
+          fi
